@@ -116,8 +116,10 @@
 
 <script>
 const $ = id => document.getElementById(id);
-// Served by dashboard.py locally -> live API. Served from GitHub Pages -> JSON snapshots written by the cloud bot.
+// Served by dashboard.py locally -> live API. Hosted online (Vercel) -> JSON snapshots written by the cloud bot.
 const STATIC = !["127.0.0.1", "localhost"].includes(location.hostname);
+// The cloud bot commits fresh JSON here every ~15 min, so the hosted page never needs redeploying.
+const DATA_URL = "https://raw.githubusercontent.com/EPFRAGHU/delta-paper-bot/main/docs/data";
 let mode = new URLSearchParams(location.search).get("mode") || "paper";
 if (STATIC && !["paper", "backtest"].includes(mode)) mode = "paper";
 let chart, candleS, emaS, upS, loS, stopLine, curveChart, curveS, fitted = {};
@@ -245,7 +247,7 @@ function render(d) {
 
 async function load() {
   try {
-    const r = await fetch(STATIC ? `data/${mode}.json?t=${Date.now()}` : "/api/data?mode=" + mode);
+    const r = await fetch(STATIC ? `${DATA_URL}/${mode}.json?t=${Date.now()}` : "/api/data?mode=" + mode);
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || r.status);
     render(d);
