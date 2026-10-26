@@ -25,7 +25,10 @@
   .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; background: var(--panel2); color: var(--muted); }
   .pill.ok { color: var(--green); } .pill.bad { color: var(--red); } .pill.warn { color: var(--accent); }
   .spacer { flex: 1; }
-  .price { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .price { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; transition: color .3s; }
+  .live { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .5px; }
+  .live.on { color: var(--green); animation: blink 2s infinite; }
+  @keyframes blink { 50% { opacity: .45; } }
   main { padding: 16px 20px; display: grid; gap: 16px; max-width: 1500px; margin: 0 auto; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
   .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
@@ -69,6 +72,7 @@
   </div>
   <span class="pill" id="status">loading...</span>
   <div class="spacer"></div>
+  <span class="live" id="live" title="Live price feed from Delta Exchange">● LIVE</span>
   <span class="m" id="marklbl">Mark</span><span class="price" id="mark">—</span>
   <span class="m" id="upd"></span>
 </header>
@@ -111,7 +115,7 @@
     <div class="scroll"><table id="signals"></table></div>
   </div>
 
-  <div class="foot">Read-only view. Refreshes every 5s locally, every minute online (the cloud bot updates data every ~15 min). P&amp;L is estimated from fills incl. taker fee + 18% GST; check Delta for exact figures.</div>
+  <div class="foot">Read-only view. Price, forming candle and open P&amp;L stream live from Delta; bot data (trades, signals, stop) updates every ~15 min from the cloud bot. P&amp;L is estimated from fills incl. taker fee + 18% GST; check Delta for exact figures.</div>
 </main>
 
 <script>
@@ -123,6 +127,9 @@ const DATA_URL = "https://raw.githubusercontent.com/EPFRAGHU/delta-paper-bot/mai
 let mode = new URLSearchParams(location.search).get("mode") || "paper";
 if (STATIC && !["paper", "backtest"].includes(mode)) mode = "paper";
 let chart, candleS, emaS, upS, loS, stopLine, curveChart, curveS, fitted = {};
+let lastData = null, liveBar = null;
+const live = { mark: 0, last: 0, at: 0 };
+const CV = 0.01;  // ETHUSD contract = 0.01 ETH
 
 const usd = (v, d = 2) => v == null ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(d);
 const sgn = (v, d = 2) => v == null ? "—" : (v > 0 ? "+" : v < 0 ? "-" : "") + "$" + Math.abs(v).toFixed(d);
@@ -157,10 +164,9 @@ function barTime(t, candles) {
 
 function render(d) {
   $("err").style.display = "none";
-  const prev = parseFloat($("mark").dataset.v || "0");
-  $("mark").textContent = d.mark ? "$" + d.mark.toFixed(2) : "—";
-  $("mark").dataset.v = d.mark || 0;
-  $("mark").className = "price " + (prev && d.mark > prev ? "g" : prev && d.mark < prev ? "r" : "");
+  lastData = d;
+  if (d.mode !== "backtest" && live.mark) withLive(d);  // never let a 15-min-old snapshot overwrite a live tick
+  setPrice(d.mark);
   $("marklbl").textContent = d.mode === "backtest" ? "Last close (historical)" : "Mark";
   $("upd").textContent = d.updated ? "updated " + new Date(d.updated * 1000).toLocaleTimeString() : "";
 
@@ -171,23 +177,12 @@ function render(d) {
   else { st.className = "pill bad"; st.textContent = d.heartbeat ? "● Bot stopped (last seen " + ts(d.heartbeat) + ")" : "● Bot not started in this mode"; }
   $("nextdec").textContent = d.next_decision ? "next decision " + ts(d.next_decision) : (d.buy_hold_pct != null ? "ETH buy & hold over same period: " + pct(d.buy_hold_pct) : "");
 
-  // KPI cards
-  const s = d.stats || {}, p = d.position;
-  const kp = [
-    ["Equity", usd(d.equity), d.start_equity != null ? "start " + usd(d.start_equity) : "waiting for bot", ""],
-    ["Net realized P&L", sgn(s.net_pnl), pct(s.return_pct), cls(s.net_pnl)],
-    ["Unrealized P&L", p ? sgn(p.upnl) : "$0.00", p ? pct(p.upnl_pct, 2) + " of position value" : "no open position", p ? cls(p.upnl) : ""],
-    ["Win rate", s.trades ? s.win_rate.toFixed(1) + "%" : "—", (s.wins || 0) + " wins · " + (s.losses || 0) + " losses", ""],
-    ["Gross profit / loss", s.trades ? sgn(s.gross_profit) + " / " + sgn(s.gross_loss) : "—", "fees paid ≈ " + usd(s.fees), ""],
-    ["Profit factor", s.profit_factor != null ? s.profit_factor.toFixed(2) : "—", "avg win " + usd(s.avg_win) + " · avg loss " + usd(s.avg_loss), ""],
-    ["Best / worst trade", s.trades ? sgn(s.best) + " / " + sgn(s.worst) : "—", (s.trades || 0) + " closed trades", ""],
-    ["Max drawdown", s.trades ? s.max_dd_pct.toFixed(1) + "%" : "—", "bot halts at 25%", s.max_dd_pct > 15 ? "r" : ""],
-  ];
-  $("kpis").innerHTML = kp.map(k => `<div class="kpi"><div class="l">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join("");
+  renderKpis(d);
 
   // price chart
-  const c = d.chart;
+  const c = d.chart, p = d.position;
   candleS.setData(c.candles); emaS.setData(c.ema); upS.setData(c.upper); loS.setData(c.lower);
+  liveBar = d.mode !== "backtest" && c.candles.length ? { ...c.candles[c.candles.length - 1] } : null;
   const marks = [];
   for (const t of d.trades) {
     const ti = t.entry_time && barTime(t.entry_time, c.candles), to = barTime(t.exit_time, c.candles);
@@ -209,7 +204,34 @@ function render(d) {
   }
   curveS.setData(d.curve || []); curveChart.timeScale().fitContent();
 
-  // open position
+  renderPos(d);
+  renderTables(d);
+}
+
+function setPrice(v) {
+  const el = $("mark"), prev = parseFloat(el.dataset.v || "0");
+  el.textContent = v ? "$" + v.toFixed(2) : "—";
+  el.dataset.v = v || 0;
+  if (prev && v !== prev) el.className = "price " + (v > prev ? "g" : "r");
+}
+
+function renderKpis(d) {
+  const s = d.stats || {}, p = d.position;
+  const kp = [
+    ["Equity", usd(d.equity), d.start_equity != null ? "start " + usd(d.start_equity) : "waiting for bot", ""],
+    ["Net realized P&L", sgn(s.net_pnl), pct(s.return_pct), cls(s.net_pnl)],
+    ["Unrealized P&L", p ? sgn(p.upnl) : "$0.00", p ? pct(p.upnl_pct, 2) + " of position value" : "no open position", p ? cls(p.upnl) : ""],
+    ["Win rate", s.trades ? s.win_rate.toFixed(1) + "%" : "—", (s.wins || 0) + " wins · " + (s.losses || 0) + " losses", ""],
+    ["Gross profit / loss", s.trades ? sgn(s.gross_profit) + " / " + sgn(s.gross_loss) : "—", "fees paid ≈ " + usd(s.fees), ""],
+    ["Profit factor", s.profit_factor != null ? s.profit_factor.toFixed(2) : "—", "avg win " + usd(s.avg_win) + " · avg loss " + usd(s.avg_loss), ""],
+    ["Best / worst trade", s.trades ? sgn(s.best) + " / " + sgn(s.worst) : "—", (s.trades || 0) + " closed trades", ""],
+    ["Max drawdown", s.trades ? s.max_dd_pct.toFixed(1) + "%" : "—", "bot halts at 25%", s.max_dd_pct > 15 ? "r" : ""],
+  ];
+  $("kpis").innerHTML = kp.map(k => `<div class="kpi"><div class="l">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join("");
+}
+
+function renderPos(d) {
+  const p = d.position;
   $("possub").innerHTML = p ? side(p.side) : "";
   $("pos").innerHTML = p ? `<div class="pos">
       <div><div class="l">Size</div><div class="v">${p.qty} contracts</div></div>
@@ -221,7 +243,9 @@ function render(d) {
       <div><div class="l">Unrealized P&amp;L</div><div class="v ${cls(p.upnl)}">${sgn(p.upnl)} (${pct(p.upnl_pct, 2)})</div></div>
       <div><div class="l">Opened</div><div class="v">${ts(p.opened)}</div></div>
     </div>` : `<div class="empty">Flat. Waiting for a breakout signal.</div>`;
+}
 
+function renderTables(d) {
   // trades table
   $("tcount").textContent = d.trades.length + " trades";
   $("trades").innerHTML = `<tr><th>Entry time</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit time</th><th>Exit</th><th>Held</th><th>Move</th><th>Fee</th><th>P&amp;L</th><th>Result</th></tr>` +
@@ -244,6 +268,65 @@ function render(d) {
         <td>${usd(+r.equity)}</td></tr>`;
     }).join("") : `<tr><td colspan="8" class="empty">No candle closes logged yet. The bot writes one row every 4 hours.</td></tr>`);
 }
+
+// --- live prices: Delta India public websocket, REST polling as fallback -------------------------
+function withLive(d) {
+  // overlay the latest tick on a snapshot: mark price and the open position's P&L
+  d.mark = live.mark;
+  const p = d.position;
+  if (p) {
+    p.mark = live.mark;
+    p.upnl = p.side * (live.mark - p.entry) * p.qty * CV;
+    p.upnl_pct = 100 * p.upnl / (p.entry * p.qty * CV);
+    p.notional = p.qty * CV * live.mark;
+    p.risk_to_stop = p.side * (p.stop - live.mark) * p.qty * CV;
+    p.eff_leverage = d.equity ? p.notional / d.equity : null;
+  }
+  return d;
+}
+
+function onTick(mark, last) {
+  live.mark = mark; live.last = last || mark; live.at = Date.now();
+  $("live").className = "live on";
+  if (!lastData || lastData.mode === "backtest") return;
+  withLive(lastData);
+  setPrice(live.mark);
+  if (lastData.position) { renderPos(lastData); renderKpis(lastData); }
+  // grow the forming 4h candle with the last traded price
+  const bar = Math.floor(Date.now() / 1000 / 14400) * 14400;
+  if (!liveBar || liveBar.time < bar) liveBar = { time: bar, open: live.last, high: live.last, low: live.last, close: live.last };
+  liveBar.close = live.last;
+  liveBar.high = Math.max(liveBar.high, live.last);
+  liveBar.low = Math.min(liveBar.low, live.last);
+  candleS.update(liveBar);
+}
+
+let ws, pollTimer;
+function connectLive() {
+  try { ws = new WebSocket("wss://socket.india.delta.exchange"); } catch { return startPolling(); }
+  ws.onopen = () => {
+    stopPolling();
+    ws.send(JSON.stringify({ type: "subscribe", payload: { channels: [{ name: "v2/ticker", symbols: ["ETHUSD"] }] } }));
+  };
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === "v2/ticker" && m.symbol === "ETHUSD") onTick(+m.mark_price, +m.close);
+  };
+  ws.onclose = () => { $("live").className = "live"; startPolling(); setTimeout(connectLive, 5000); };
+  ws.onerror = () => ws.close();
+}
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    try {
+      const t = (await (await fetch("https://api.india.delta.exchange/v2/tickers/ETHUSD")).json()).result;
+      onTick(+t.mark_price, +t.close);
+    } catch { $("live").className = "live"; }
+  }, 3000);
+}
+function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
+// if ticks stop arriving for 20s, show the feed as stale
+setInterval(() => { if (Date.now() - live.at > 20000) $("live").className = "live"; }, 5000);
 
 async function load() {
   try {
@@ -269,6 +352,7 @@ document.querySelectorAll("#tabs button").forEach(b => {
 });
 makeCharts();
 load();
+connectLive();
 setInterval(() => { if (mode !== "backtest") load(); }, STATIC ? 60000 : 5000);
 </script>
 </body>
