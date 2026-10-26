@@ -62,7 +62,9 @@ Logs: `bot_<mode>.log`. Trades: `trades.csv`.
 - replays 5-minute candles since the last run, so a stop touched in between is still caught
 - decides on any newly closed 4h candle
 - commits `state_paper.json`, `trades.csv` and `signals.csv`
-- refreshes the online dashboard in `docs/` (GitHub Pages)
+- refreshes the dashboard data in `docs/data/`
+
+Online dashboard: https://delta-paper-bot.vercel.app. It's hosted on Vercel and reads `docs/data/*.json` straight from GitHub, so it never needs redeploying. Data can lag by up to about 5 minutes because of GitHub's cache.
 
 Limits: GitHub can delay scheduled runs by 5–20 minutes, so paper entries can be a little later than the candle close. Only paper mode runs this way. Live trading needs an always-on machine with a whitelisted static IP.
 
