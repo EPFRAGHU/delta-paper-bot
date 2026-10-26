@@ -4,7 +4,8 @@ name: paper-bot
 # (GitHub may delay scheduled runs by several minutes), then commits state + dashboard data.
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # off-peak minutes: GitHub drops/delays many runs scheduled at :00/:15/:30/:45
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
 
 permissions:
