@@ -1,0 +1,10 @@
+{
+  "entry_len": 55,
+  "exit_len": 10,
+  "trend_len": 200,
+  "atr_len": 14,
+  "atr_stop": 2.5,
+  "atr_trail": 3.0,
+  "adx_len": 14,
+  "adx_min": 20.0
+}

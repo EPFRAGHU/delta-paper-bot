@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Dashboard</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #0b0e11; --panel: #151a21; --panel2: #1c232c; --line: #2a323d;
+    --text: #e6e9ee; --muted: #8a94a3; --green: #16c784; --red: #ea3943;
+    --accent: #f0b90b; --blue: #3b82f6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  .brand { font-weight: 700; font-size: 15px; }
+  .brand small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .tabs { display: flex; gap: 4px; background: var(--bg); padding: 3px; border-radius: 6px; }
+  .tabs button { background: none; border: 0; color: var(--muted); padding: 6px 14px;
+    border-radius: 4px; cursor: pointer; font: inherit; }
+  .tabs button.on { background: var(--panel2); color: var(--text); }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; background: var(--panel2); color: var(--muted); }
+  .pill.ok { color: var(--green); } .pill.bad { color: var(--red); } .pill.warn { color: var(--accent); }
+  .spacer { flex: 1; }
+  .price { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  main { padding: 16px 20px; display: grid; gap: 16px; max-width: 1500px; margin: 0 auto; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .kpi .l { color: var(--muted); font-size: 12px; }
+  .kpi .v { font-size: 20px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+  @media (max-width: 1000px) { .grid2 { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .panel h3 { margin: 0; padding: 10px 14px; font-size: 13px; font-weight: 600;
+    border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .panel h3 span { color: var(--muted); font-weight: 400; }
+  #chart { height: 440px; } #curve { height: 220px; }
+  .legend { display: flex; gap: 14px; padding: 8px 14px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 10px; height: 3px; margin-right: 5px; vertical-align: middle; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; background: var(--panel2); position: sticky; top: 0; }
+  th:first-child, td:first-child { text-align: left; }
+  .scroll { max-height: 380px; overflow: auto; }
+  .g { color: var(--green); } .r { color: var(--red); } .m { color: var(--muted); }
+  .tag { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .tag.long { background: rgba(22,199,132,.15); color: var(--green); }
+  .tag.short { background: rgba(234,57,67,.15); color: var(--red); }
+  .tag.flat { background: var(--panel2); color: var(--muted); }
+  .pos { padding: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+  .pos div .l { color: var(--muted); font-size: 12px; } .pos div .v { font-size: 15px; font-weight: 600; }
+  .empty { padding: 28px 14px; text-align: center; color: var(--muted); }
+  .err { background: rgba(234,57,67,.12); color: var(--red); padding: 10px 14px; border-radius: 6px; display: none; }
+  .foot { color: var(--muted); font-size: 12px; text-align: center; padding-bottom: 20px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">ETHUSD Perp Bot <small id="sub">4h trend breakout</small></div>
+  <div class="tabs" id="tabs">
+    <button data-m="paper" class="on">Paper</button>
+    <button data-m="testnet">Testnet</button>
+    <button data-m="live">Live</button>
+    <button data-m="backtest">Backtest</button>
+  </div>
+  <span class="pill" id="status">loading...</span>
+  <div class="spacer"></div>
+  <span class="m" id="marklbl">Mark</span><span class="price" id="mark">—</span>
+  <span class="m" id="upd"></span>
+</header>
+
+<main>
+  <div class="err" id="err"></div>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>Price chart · entries &amp; exits <span id="nextdec"></span></h3>
+      <div id="chart"></div>
+      <div class="legend">
+        <span><i style="background:#f0b90b"></i>EMA 200 (trend filter)</span>
+        <span><i style="background:#3b82f6"></i>Breakout high / low</span>
+        <span><i style="background:#16c784"></i>Long entry ▲</span>
+        <span><i style="background:#ea3943"></i>Short entry ▼</span>
+        <span><i style="background:#c084fc"></i>Exit ●</span>
+      </div>
+    </div>
+    <div style="display:grid; gap:16px; align-content:start">
+      <div class="panel">
+        <h3>Open position <span id="possub"></span></h3>
+        <div id="pos"></div>
+      </div>
+      <div class="panel">
+        <h3>Equity curve <span>realized</span></h3>
+        <div id="curve"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Trade history <span id="tcount"></span></h3>
+    <div class="scroll"><table id="trades"></table></div>
+  </div>
+
+  <div class="panel" id="sigpanel">
+    <h3>Signal log <span>every 4h candle close while flat</span></h3>
+    <div class="scroll"><table id="signals"></table></div>
+  </div>
+
+  <div class="foot">Read-only view. Refreshes every 5s locally, every minute online (the cloud bot updates data every ~15 min). P&amp;L is estimated from fills incl. taker fee + 18% GST; check Delta for exact figures.</div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+// Served by dashboard.py locally -> live API. Served from GitHub Pages -> JSON snapshots written by the cloud bot.
+const STATIC = !["127.0.0.1", "localhost"].includes(location.hostname);
+let mode = new URLSearchParams(location.search).get("mode") || "paper";
+if (STATIC && !["paper", "backtest"].includes(mode)) mode = "paper";
+let chart, candleS, emaS, upS, loS, stopLine, curveChart, curveS, fitted = {};
+
+const usd = (v, d = 2) => v == null ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(d);
+const sgn = (v, d = 2) => v == null ? "—" : (v > 0 ? "+" : v < 0 ? "-" : "") + "$" + Math.abs(v).toFixed(d);
+const pct = (v, d = 1) => v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(d) + "%";
+const cls = v => v > 0 ? "g" : v < 0 ? "r" : "";
+const ts = t => t ? new Date(t * 1000).toLocaleString(undefined, { year: "2-digit", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
+const dur = (a, b) => { if (!a || !b) return "—"; const h = (b - a) / 3600; return h >= 48 ? (h / 24).toFixed(1) + "d" : h.toFixed(0) + "h"; };
+const side = s => s > 0 ? '<span class="tag long">LONG</span>' : s < 0 ? '<span class="tag short">SHORT</span>' : '<span class="tag flat">—</span>';
+
+function makeCharts() {
+  const base = {
+    layout: { background: { color: "#151a21" }, textColor: "#8a94a3" },
+    grid: { vertLines: { color: "#1f2630" }, horzLines: { color: "#1f2630" } },
+    rightPriceScale: { borderColor: "#2a323d" }, timeScale: { borderColor: "#2a323d", timeVisible: true },
+    crosshair: { mode: 0 },
+  };
+  chart = LightweightCharts.createChart($("chart"), { ...base, autoSize: true });
+  candleS = chart.addCandlestickSeries({ upColor: "#16c784", downColor: "#ea3943", borderVisible: false,
+    wickUpColor: "#16c784", wickDownColor: "#ea3943" });
+  emaS = chart.addLineSeries({ color: "#f0b90b", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  upS = chart.addLineSeries({ color: "rgba(59,130,246,.6)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+  loS = chart.addLineSeries({ color: "rgba(59,130,246,.6)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+  curveChart = LightweightCharts.createChart($("curve"), { ...base, autoSize: true });
+  curveS = curveChart.addAreaSeries({ lineColor: "#16c784", topColor: "rgba(22,199,132,.3)", bottomColor: "rgba(22,199,132,0)", lineWidth: 2 });
+}
+
+function barTime(t, candles) {
+  // snap a timestamp to the 4h candle it falls in, so markers sit on a bar
+  const step = 4 * 3600, b = Math.floor(t / step) * step;
+  return candles.length && b < candles[0].time ? null : b;
+}
+
+function render(d) {
+  $("err").style.display = "none";
+  const prev = parseFloat($("mark").dataset.v || "0");
+  $("mark").textContent = d.mark ? "$" + d.mark.toFixed(2) : "—";
+  $("mark").dataset.v = d.mark || 0;
+  $("mark").className = "price " + (prev && d.mark > prev ? "g" : prev && d.mark < prev ? "r" : "");
+  $("marklbl").textContent = d.mode === "backtest" ? "Last close (historical)" : "Mark";
+  $("upd").textContent = d.updated ? "updated " + new Date(d.updated * 1000).toLocaleTimeString() : "";
+
+  const st = $("status");
+  if (d.mode === "backtest") { st.className = "pill warn"; st.textContent = "Historical simulation"; }
+  else if (d.halted) { st.className = "pill bad"; st.textContent = "Halted: max drawdown"; }
+  else if (d.bot_alive) { st.className = "pill ok"; st.textContent = "● Bot running" + (d.heartbeat_every >= 600 ? " in cloud · checks every ~15 min" : "") + (d.stop_file ? " · STOP file: no new entries" : ""); }
+  else { st.className = "pill bad"; st.textContent = d.heartbeat ? "● Bot stopped (last seen " + ts(d.heartbeat) + ")" : "● Bot not started in this mode"; }
+  $("nextdec").textContent = d.next_decision ? "next decision " + ts(d.next_decision) : (d.buy_hold_pct != null ? "ETH buy & hold over same period: " + pct(d.buy_hold_pct) : "");
+
+  // KPI cards
+  const s = d.stats || {}, p = d.position;
+  const kp = [
+    ["Equity", usd(d.equity), d.start_equity != null ? "start " + usd(d.start_equity) : "waiting for bot", ""],
+    ["Net realized P&L", sgn(s.net_pnl), pct(s.return_pct), cls(s.net_pnl)],
+    ["Unrealized P&L", p ? sgn(p.upnl) : "$0.00", p ? pct(p.upnl_pct, 2) + " of position value" : "no open position", p ? cls(p.upnl) : ""],
+    ["Win rate", s.trades ? s.win_rate.toFixed(1) + "%" : "—", (s.wins || 0) + " wins · " + (s.losses || 0) + " losses", ""],
+    ["Gross profit / loss", s.trades ? sgn(s.gross_profit) + " / " + sgn(s.gross_loss) : "—", "fees paid ≈ " + usd(s.fees), ""],
+    ["Profit factor", s.profit_factor != null ? s.profit_factor.toFixed(2) : "—", "avg win " + usd(s.avg_win) + " · avg loss " + usd(s.avg_loss), ""],
+    ["Best / worst trade", s.trades ? sgn(s.best) + " / " + sgn(s.worst) : "—", (s.trades || 0) + " closed trades", ""],
+    ["Max drawdown", s.trades ? s.max_dd_pct.toFixed(1) + "%" : "—", "bot halts at 25%", s.max_dd_pct > 15 ? "r" : ""],
+  ];
+  $("kpis").innerHTML = kp.map(k => `<div class="kpi"><div class="l">${k[0]}</div><div class="v ${k[3]}">${k[1]}</div><div class="s">${k[2]}</div></div>`).join("");
+
+  // price chart
+  const c = d.chart;
+  candleS.setData(c.candles); emaS.setData(c.ema); upS.setData(c.upper); loS.setData(c.lower);
+  const marks = [];
+  for (const t of d.trades) {
+    const ti = t.entry_time && barTime(t.entry_time, c.candles), to = barTime(t.exit_time, c.candles);
+    if (ti) marks.push({ time: ti, position: t.side > 0 ? "belowBar" : "aboveBar", color: t.side > 0 ? "#16c784" : "#ea3943",
+      shape: t.side > 0 ? "arrowUp" : "arrowDown", text: (t.side > 0 ? "L " : "S ") + t.entry.toFixed(0) });
+    if (to) marks.push({ time: to, position: t.side > 0 ? "aboveBar" : "belowBar", color: "#c084fc", shape: "circle",
+      text: sgn(t.pnl) });
+  }
+  if (p && p.opened) { const ti = barTime(p.opened, c.candles); if (ti) marks.push({ time: ti, position: p.side > 0 ? "belowBar" : "aboveBar", color: p.side > 0 ? "#16c784" : "#ea3943", shape: p.side > 0 ? "arrowUp" : "arrowDown", text: "OPEN " + p.entry.toFixed(0) }); }
+  marks.sort((a, b) => a.time - b.time);
+  candleS.setMarkers(marks);
+  if (stopLine) { candleS.removePriceLine(stopLine); stopLine = null; }
+  if (p) stopLine = candleS.createPriceLine({ price: p.stop, color: "#ea3943", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "STOP" });
+  if (!fitted[d.mode]) {
+    const n = c.candles.length;
+    if (d.mode === "backtest") chart.timeScale().fitContent();
+    else if (n) chart.timeScale().setVisibleLogicalRange({ from: n - 180, to: n + 5 });
+    fitted = { [d.mode]: true };
+  }
+  curveS.setData(d.curve || []); curveChart.timeScale().fitContent();
+
+  // open position
+  $("possub").innerHTML = p ? side(p.side) : "";
+  $("pos").innerHTML = p ? `<div class="pos">
+      <div><div class="l">Size</div><div class="v">${p.qty} contracts</div></div>
+      <div><div class="l">Notional / leverage</div><div class="v">${usd(p.notional)} · ${p.eff_leverage ? p.eff_leverage.toFixed(2) + "x" : "—"}</div></div>
+      <div><div class="l">Entry price</div><div class="v">${p.entry.toFixed(2)}</div></div>
+      <div><div class="l">Mark price</div><div class="v">${p.mark.toFixed(2)}</div></div>
+      <div><div class="l">Stop (trailing)</div><div class="v r">${p.stop.toFixed(2)}</div></div>
+      <div><div class="l">P&amp;L if stopped now</div><div class="v ${cls(p.risk_to_stop)}">${sgn(p.risk_to_stop)}</div></div>
+      <div><div class="l">Unrealized P&amp;L</div><div class="v ${cls(p.upnl)}">${sgn(p.upnl)} (${pct(p.upnl_pct, 2)})</div></div>
+      <div><div class="l">Opened</div><div class="v">${ts(p.opened)}</div></div>
+    </div>` : `<div class="empty">Flat. Waiting for a breakout signal.</div>`;
+
+  // trades table
+  $("tcount").textContent = d.trades.length + " trades";
+  $("trades").innerHTML = `<tr><th>Entry time</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit time</th><th>Exit</th><th>Held</th><th>Move</th><th>Fee</th><th>P&amp;L</th><th>Result</th></tr>` +
+    (d.trades.length ? d.trades.map(t => {
+      const mv = 100 * t.side * (t.exit - t.entry) / t.entry;
+      return `<tr><td>${ts(t.entry_time)}</td><td>${side(t.side)}</td><td>${t.qty}</td><td>${t.entry.toFixed(2)}</td>
+        <td>${ts(t.exit_time)}</td><td>${t.exit.toFixed(2)}</td><td>${dur(t.entry_time, t.exit_time)}</td>
+        <td class="${cls(mv)}">${pct(mv, 2)}</td><td class="m">${usd(t.fee, 3)}</td>
+        <td class="${cls(t.pnl)}"><b>${sgn(t.pnl, 3)}</b></td><td>${t.pnl > 0 ? '<span class="g">Profit</span>' : '<span class="r">Loss</span>'}<span class="m"> · ${t.reason}</span></td></tr>`;
+    }).join("") : `<tr><td colspan="11" class="empty">No closed trades yet${d.mode === "paper" ? ". Open the Backtest tab to see how trades look." : "."}</td></tr>`);
+
+  // signal log
+  $("sigpanel").style.display = d.mode === "backtest" ? "none" : "";
+  $("signals").innerHTML = `<tr><th>Candle close (UTC)</th><th>Close</th><th>EMA 200</th><th>Trend</th><th>ADX</th><th>ATR</th><th>Signal</th><th>Equity</th></tr>` +
+    (d.signals.length ? d.signals.map(r => {
+      const sg = +r.signal, up = +r.close > +r.ema200;
+      return `<tr><td>${r.time.replace("T", " ").slice(0, 16)}</td><td>${(+r.close).toFixed(2)}</td><td>${(+r.ema200).toFixed(2)}</td>
+        <td class="${up ? "g" : "r"}">${up ? "above" : "below"}</td><td>${(+r.adx).toFixed(1)}${+r.adx < d.params.adx_min ? ' <span class="m">weak</span>' : ""}</td>
+        <td>${(+r.atr).toFixed(2)}</td><td>${sg > 0 ? '<span class="tag long">BUY</span>' : sg < 0 ? '<span class="tag short">SELL</span>' : '<span class="m">none</span>'}</td>
+        <td>${usd(+r.equity)}</td></tr>`;
+    }).join("") : `<tr><td colspan="8" class="empty">No candle closes logged yet. The bot writes one row every 4 hours.</td></tr>`);
+}
+
+async function load() {
+  try {
+    const r = await fetch(STATIC ? `data/${mode}.json?t=${Date.now()}` : "/api/data?mode=" + mode);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    render(d);
+  } catch (e) {
+    $("err").style.display = "block";
+    $("err").textContent = "Could not load data: " + e.message + (STATIC ? " (the cloud bot may not have run yet)" : " (is dashboard.py running?)");
+  }
+}
+
+document.querySelectorAll("#tabs button").forEach(b => {
+  if (STATIC && !["paper", "backtest"].includes(b.dataset.m)) { b.remove(); return; }
+  b.classList.toggle("on", b.dataset.m === mode);
+  b.onclick = () => {
+    mode = b.dataset.m;
+    document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b));
+    history.replaceState(null, "", "?mode=" + mode);
+    load();
+  };
+});
+makeCharts();
+load();
+setInterval(() => { if (mode !== "backtest") load(); }, STATIC ? 60000 : 5000);
+</script>
+</body>
+</html>

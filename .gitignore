@@ -1,0 +1,7 @@
+.env
+*.log
+/data/
+__pycache__/
+state.json
+state_testnet.json
+STOP
