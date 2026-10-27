@@ -45,6 +45,17 @@ Other GitHub strategies, same ETH data, fees and sizing (`strategy_compare.py`, 
 | Larry Williams volatility breakout, k=0.4 to 0.8 | -66% to -9% | -40% to +7% |
 | Dual Thrust (quant-trading repo), k=0.3 to 0.7 | -51% to +9% | -12% to +4% |
 
+### Timeframe x strategy study (`research/multi_tf.py`, Oct 2026)
+This study used 2 years of Delta 1m ETH candles resampled to 17 timeframes (1m to 4h), plus Binance taker flow for order-flow delta. It ran 7 textbook strategies with no per-timeframe tuning, and identical fees, GST, slippage, 1.5% risk and 10x cap. "Early" is the first 60% of the period and "late" the last 40%.
+- **Every strategy blows up the account (-91%) on 1m, 2m, 3m and 5m.** Fees and noise win at that speed. Nearly everything below 30m loses.
+- Profitable in both periods, most robust first:
+  - Donchian breakout (this bot) on 4h: +37% early, +11% late, max DD 8%.
+  - EMA 9/21 + EMA200 on 90m: +15% early, +49% late, DD 19%.
+  - EMA 9/21 on 4h: +21% / +12%.
+  - Donchian on 90m and 1h: about +7–11% in each period.
+- RSI and Bollinger mean reversion lose on almost every timeframe. VWAP cross loses below 3h. Order-flow delta is weakly positive only between 45m and 3h, then fades in the late period.
+- Volume profile was not tested: it needs tick or footprint history, which isn't freely available.
+
 Frameworks: freqtrade and jesse don't support Delta Exchange. CCXT's `delta` class points at Delta Global (`api.delta.exchange`), which Delta says India accounts can't use, so this bot talks to the India API directly.
 
 Paid APIs (CoinGlass, CoinMarketCap, CoinAPI, from $29/mo) mostly sell the same funding, OI and price data. That costs about half this account per month for no tested edge.
