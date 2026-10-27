@@ -30,9 +30,11 @@ def load_candles(symbol, resolution, days):
     return candles
 
 
-def run(candles, symbol, p: Params, rc: RiskConfig, equity=55.0, start=0, end=None, entry_filter=None):
+def run(candles, symbol, p: Params, rc: RiskConfig, equity=55.0, start=0, end=None, entry_filter=None,
+        entry_price=None):
     """Bar-by-bar simulation. Signals on bar i close, fill at bar i+1 open.
-    entry_filter(i, signal) -> bool can veto entries (used to test extra data like funding)."""
+    entry_filter(i, signal) -> bool can veto entries (used to test extra data like funding).
+    entry_price(i) -> price overrides the fill (used to model late scheduled runs)."""
     ind = Indicators(candles, p)
     cv = CONTRACT_VALUE[symbol]
     end = end or len(candles)
@@ -71,7 +73,7 @@ def run(candles, symbol, p: Params, rc: RiskConfig, equity=55.0, start=0, end=No
             if sig and entry_filter and not entry_filter(i, sig):
                 sig = 0
             if sig:
-                entry = o[i + 1]
+                entry = entry_price(i) if entry_price else o[i + 1]
                 stop = entry - sig * p.atr_stop * ind.atr[i]
                 qty = size_contracts(equity, entry, stop, cv, rc)
                 if qty:
