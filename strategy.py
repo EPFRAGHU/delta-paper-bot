@@ -102,6 +102,9 @@ class Indicators:
             return -1
         return 0
 
+    def exit_signal(self, i, side):
+        return False  # exits come only from the trailing stop
+
     def trail_stop(self, i, side, cur_stop, best_price):
         p = self.p
         if side > 0:
@@ -109,3 +112,61 @@ class Indicators:
         else:
             s = min(cur_stop, max(self.h[i - p.exit_len + 1:i + 1]), best_price + p.atr_trail * self.atr[i])
         return s
+
+
+@dataclass
+class EmaParams:
+    fast: int = 9
+    slow: int = 21
+    trend_len: int = 200
+    atr_len: int = 14
+    atr_stop: float = 2.0
+    adx_len: int = 14
+    adx_min: float = 0.0  # not used for entries; kept so dashboards/logs can show ADX
+
+
+class EmaCross:
+    """EMA 9/21 crossover in the direction of the 200 EMA.
+
+    Long  entry: EMA9 crosses above EMA21 while close > EMA200.  Exit: EMA9 crosses back below EMA21.
+    Short entry: mirror image.  Initial stop: 2 x ATR from entry, not trailed.
+    """
+
+    def __init__(self, candles, p: EmaParams):
+        self.h = [float(c["high"]) for c in candles]
+        self.l = [float(c["low"]) for c in candles]
+        self.c = [float(c["close"]) for c in candles]
+        self.fast = ema(self.c, p.fast)
+        self.slow = ema(self.c, p.slow)
+        self.ema = ema(self.c, p.trend_len)
+        self.atr = atr(self.h, self.l, self.c, p.atr_len)
+        self.adx = adx(self.h, self.l, self.c, p.adx_len)
+        self.p = p
+
+    def warm(self, i):
+        return i >= self.p.trend_len + 5
+
+    def _cross(self, i):
+        if i < 1:
+            return 0
+        if self.fast[i] > self.slow[i] and self.fast[i - 1] <= self.slow[i - 1]:
+            return 1
+        if self.fast[i] < self.slow[i] and self.fast[i - 1] >= self.slow[i - 1]:
+            return -1
+        return 0
+
+    def entry_signal(self, i):
+        if not self.warm(i):
+            return 0
+        x = self._cross(i)
+        if x > 0 and self.c[i] > self.ema[i]:
+            return 1
+        if x < 0 and self.c[i] < self.ema[i]:
+            return -1
+        return 0
+
+    def exit_signal(self, i, side):
+        return self._cross(i) == -side
+
+    def trail_stop(self, i, side, cur_stop, best_price):
+        return cur_stop

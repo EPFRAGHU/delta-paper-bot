@@ -1,0 +1,9 @@
+{
+  "fast": 9,
+  "slow": 21,
+  "trend_len": 200,
+  "atr_len": 14,
+  "atr_stop": 2.0,
+  "adx_len": 14,
+  "adx_min": 0.0
+}

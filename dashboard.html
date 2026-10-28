@@ -63,9 +63,10 @@
 </head>
 <body>
 <header>
-  <div class="brand">ETHUSD Perp Bot <small id="sub">4h trend breakout</small></div>
+  <div class="brand">ETHUSD Perp Bot <small id="sub"></small></div>
   <div class="tabs" id="tabs">
-    <button data-m="paper" class="on">Paper</button>
+    <button data-m="paper" class="on">Paper · Donchian 4h</button>
+    <button data-m="paper_ema90">Paper · EMA 90m</button>
     <button data-m="testnet">Testnet</button>
     <button data-m="live">Live</button>
     <button data-m="backtest">Backtest</button>
@@ -86,8 +87,7 @@
       <h3>Price chart · entries &amp; exits <span id="nextdec"></span></h3>
       <div id="chart"></div>
       <div class="legend">
-        <span><i style="background:#f0b90b"></i>EMA 200 (trend filter)</span>
-        <span><i style="background:#3b82f6"></i>Breakout high / low</span>
+        <span id="linelegend"></span>
         <span><i style="background:#16c784"></i>Long entry ▲</span>
         <span><i style="background:#ea3943"></i>Short entry ▼</span>
         <span><i style="background:#c084fc"></i>Exit ●</span>
@@ -111,7 +111,7 @@
   </div>
 
   <div class="panel" id="sigpanel">
-    <h3>Signal log <span>every 4h candle close while flat</span></h3>
+    <h3>Signal log <span id="sigsub"></span></h3>
     <div class="scroll"><table id="signals"></table></div>
   </div>
 
@@ -125,8 +125,9 @@ const STATIC = !["127.0.0.1", "localhost"].includes(location.hostname);
 // The cloud bot commits fresh JSON here every ~15 min, so the hosted page never needs redeploying.
 const DATA_URL = "https://raw.githubusercontent.com/EPFRAGHU/delta-paper-bot/main/docs/data";
 let mode = new URLSearchParams(location.search).get("mode") || "paper";
-if (STATIC && !["paper", "backtest"].includes(mode)) mode = "paper";
-let chart, candleS, emaS, upS, loS, stopLine, curveChart, curveS, fitted = {};
+const ONLINE_VIEWS = ["paper", "paper_ema90", "backtest"];  // views the cloud bot exports
+if (STATIC && !ONLINE_VIEWS.includes(mode)) mode = "paper";
+let chart, candleS, lineS = [], stopLine, curveChart, curveS, fitted = {};
 let lastData = null, liveBar = null;
 const live = { mark: 0, last: 0, at: 0 };
 const CV = 0.01;  // ETHUSD contract = 0.01 ETH
@@ -149,16 +150,15 @@ function makeCharts() {
   chart = LightweightCharts.createChart($("chart"), { ...base, autoSize: true });
   candleS = chart.addCandlestickSeries({ upColor: "#16c784", downColor: "#ea3943", borderVisible: false,
     wickUpColor: "#16c784", wickDownColor: "#ea3943" });
-  emaS = chart.addLineSeries({ color: "#f0b90b", lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
-  upS = chart.addLineSeries({ color: "rgba(59,130,246,.6)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
-  loS = chart.addLineSeries({ color: "rgba(59,130,246,.6)", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+  // indicator lines are styled per strategy on each render (EMA 200 + bands, or EMA 9/21/200)
+  for (let k = 0; k < 3; k++) lineS.push(chart.addLineSeries({ lineWidth: 1, priceLineVisible: false, lastValueVisible: false }));
   curveChart = LightweightCharts.createChart($("curve"), { ...base, autoSize: true });
   curveS = curveChart.addAreaSeries({ lineColor: "#16c784", topColor: "rgba(22,199,132,.3)", bottomColor: "rgba(22,199,132,0)", lineWidth: 2 });
 }
 
-function barTime(t, candles) {
-  // snap a timestamp to the 4h candle it falls in, so markers sit on a bar
-  const step = 4 * 3600, b = Math.floor(t / step) * step;
+function barTime(t, candles, step) {
+  // snap a timestamp to the candle it falls in, so markers sit on a bar
+  const b = Math.floor(t / step) * step;
   return candles.length && b < candles[0].time ? null : b;
 }
 
@@ -181,17 +181,27 @@ function render(d) {
 
   // price chart
   const c = d.chart, p = d.position;
-  candleS.setData(c.candles); emaS.setData(c.ema); upS.setData(c.upper); loS.setData(c.lower);
+  const step = d.bar_sec || 14400;
+  candleS.setData(c.candles);
+  lineS.forEach((s, k) => {
+    const ln = c.lines[k];
+    s.applyOptions({ visible: !!ln, color: ln ? ln.color : "#000", lineWidth: k === 0 ? 2 : 1, lineStyle: ln && ln.dash ? 2 : 0 });
+    s.setData(ln ? ln.data : []);
+  });
+  $("linelegend").innerHTML = c.lines.filter(l => !/low$/.test(l.name)).map(l =>
+    `<span style="margin-right:14px"><i style="background:${l.color}"></i>${l.name.replace(/ high$/, " high / low")}</span>`).join("");
+  $("sub").textContent = d.strategy || "";
+  $("sigsub").textContent = `every ${step >= 3600 ? step / 3600 + "h" : step / 60 + "m"} candle close while flat`;
   liveBar = d.mode !== "backtest" && c.candles.length ? { ...c.candles[c.candles.length - 1] } : null;
   const marks = [];
   for (const t of d.trades) {
-    const ti = t.entry_time && barTime(t.entry_time, c.candles), to = barTime(t.exit_time, c.candles);
+    const ti = t.entry_time && barTime(t.entry_time, c.candles, step), to = barTime(t.exit_time, c.candles, step);
     if (ti) marks.push({ time: ti, position: t.side > 0 ? "belowBar" : "aboveBar", color: t.side > 0 ? "#16c784" : "#ea3943",
       shape: t.side > 0 ? "arrowUp" : "arrowDown", text: (t.side > 0 ? "L " : "S ") + t.entry.toFixed(0) });
     if (to) marks.push({ time: to, position: t.side > 0 ? "aboveBar" : "belowBar", color: "#c084fc", shape: "circle",
       text: sgn(t.pnl) });
   }
-  if (p && p.opened) { const ti = barTime(p.opened, c.candles); if (ti) marks.push({ time: ti, position: p.side > 0 ? "belowBar" : "aboveBar", color: p.side > 0 ? "#16c784" : "#ea3943", shape: p.side > 0 ? "arrowUp" : "arrowDown", text: "OPEN " + p.entry.toFixed(0) }); }
+  if (p && p.opened) { const ti = barTime(p.opened, c.candles, step); if (ti) marks.push({ time: ti, position: p.side > 0 ? "belowBar" : "aboveBar", color: p.side > 0 ? "#16c784" : "#ea3943", shape: p.side > 0 ? "arrowUp" : "arrowDown", text: "OPEN " + p.entry.toFixed(0) }); }
   marks.sort((a, b) => a.time - b.time);
   candleS.setMarkers(marks);
   if (stopLine) { candleS.removePriceLine(stopLine); stopLine = null; }
@@ -293,7 +303,7 @@ function onTick(mark, last) {
   setPrice(live.mark);
   if (lastData.position) { renderPos(lastData); renderKpis(lastData); }
   // grow the forming 4h candle with the last traded price
-  const bar = Math.floor(Date.now() / 1000 / 14400) * 14400;
+  const step = lastData.bar_sec || 14400, bar = Math.floor(Date.now() / 1000 / step) * step;
   if (!liveBar || liveBar.time < bar) liveBar = { time: bar, open: live.last, high: live.last, low: live.last, close: live.last };
   liveBar.close = live.last;
   liveBar.high = Math.max(liveBar.high, live.last);
@@ -341,7 +351,7 @@ async function load() {
 }
 
 document.querySelectorAll("#tabs button").forEach(b => {
-  if (STATIC && !["paper", "backtest"].includes(b.dataset.m)) { b.remove(); return; }
+  if (STATIC && !ONLINE_VIEWS.includes(b.dataset.m)) { b.remove(); return; }
   b.classList.toggle("on", b.dataset.m === mode);
   b.onclick = () => {
     mode = b.dataset.m;

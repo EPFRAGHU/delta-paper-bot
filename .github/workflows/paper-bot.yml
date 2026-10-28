@@ -26,8 +26,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Run one paper-trading check
+      - name: Run one paper-trading check (Donchian 4h)
         run: python bot.py --mode paper --once
+
+      - name: Run one paper-trading check (EMA 9/21 90m)
+        run: python bot.py --mode paper --once --strategy ema90
 
       - name: Export dashboard data
         run: python export_dashboard.py
@@ -36,9 +39,8 @@ jobs:
         run: |
           git config user.name "paper-bot"
           git config user.email "paper-bot@users.noreply.github.com"
-          git add state_paper.json docs
-          [ -f trades.csv ] && git add trades.csv
-          [ -f signals.csv ] && git add signals.csv
+          git add docs
+          for f in state_paper*.json trades*.csv signals*.csv; do if [ -f "$f" ]; then git add "$f"; fi; done
           git diff --cached --quiet && exit 0
           git commit -q -m "paper tick $(date -u +%Y-%m-%dT%H:%MZ)"
           git pull -q --rebase && git push -q

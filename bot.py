@@ -1,9 +1,11 @@
-"""Delta Exchange India trading bot: ETHUSD perpetual, 4h trend breakout.
+"""Delta Exchange India trading bot: ETHUSD perpetual.
 
 Modes:
   python bot.py                     paper trading on live market data (default, no keys needed)
   python bot.py --mode testnet      real orders on Delta India testnet (testnet keys)
   python bot.py --mode live         real money. Requires LIVE_CONFIRM=YES in .env too.
+
+Strategies (--strategy): donchian4h (default, 4h trend breakout) or ema90 (EMA 9/21 + EMA200 on 90m).
 
 Create a file named STOP in this folder to block new entries (open position stays protected by its stop).
 """
@@ -17,13 +19,12 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from delta_client import DeltaClient, DeltaError, PROD_URL, TESTNET_URL, _RES_SECONDS
+from delta_client import DeltaClient, DeltaError, PROD_URL, TESTNET_URL
+from profiles import PROFILES, fetch_candles
 from risk import RiskConfig, Guard, size_contracts, TAKER_FEE, SLIPPAGE
-from strategy import Params, Indicators
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SYMBOL = "ETHUSD"
-RESOLUTION = "4h"
 LEVERAGE = 10           # exchange leverage setting; never above 10 per user limit
 HISTORY_BARS = 400
 
@@ -70,14 +71,15 @@ def record_trade(row, name="trades.csv"):
 
 
 class Bot:
-    def __init__(self, mode, paper_equity):
+    def __init__(self, mode, paper_equity, prof=PROFILES["donchian4h"]):
         self.mode = mode
+        self.prof = prof
         base = TESTNET_URL if mode == "testnet" else PROD_URL
         key = os.environ.get("DELTA_API_KEY", "")
         secret = os.environ.get("DELTA_API_SECRET", "")
         self.cli = DeltaClient(key, secret, base)
         self.data = DeltaClient(base_url=base)  # public candles from the same venue
-        self.params = Params(**json.load(open(os.path.join(HERE, "params.json"))))
+        self.params = prof.params_cls(**json.load(open(os.path.join(HERE, prof.params_file))))
         self.rc = RiskConfig()
         self.state = State()
         prod = self.data.product(SYMBOL)
@@ -88,7 +90,8 @@ class Bot:
         g = self.state.d.get("guard") or {}
         self.guard = Guard(self.rc, g.get("peak", eq))
         self.guard.halted = g.get("halted", False)
-        log.info("start mode=%s %s pid=%s cv=%s equity=$%.2f params=%s", mode, SYMBOL, self.pid, self.cv, eq, self.params)
+        log.info("start mode=%s strategy=%s %s pid=%s cv=%s equity=$%.2f params=%s",
+                 mode, prof.name, SYMBOL, self.pid, self.cv, eq, self.params)
         if mode != "paper":
             self.cli.set_leverage(self.pid, LEVERAGE)
             self.reconcile()
@@ -132,14 +135,13 @@ class Bot:
 
     # --- market data -----------------------------------------------------
     def closed_candles(self):
-        step = _RES_SECONDS[RESOLUTION]
         now = int(time.time())
-        cur_bar = now // step * step
-        c = self.data.candles(SYMBOL, RESOLUTION, cur_bar - HISTORY_BARS * step, cur_bar)
+        cur_bar = now // self.prof.bar_sec * self.prof.bar_sec
+        c = fetch_candles(self.data, SYMBOL, self.prof, HISTORY_BARS, now)
         return [x for x in c if x["time"] < cur_bar]  # drop the still-forming bar
 
     def indicators(self):
-        return Indicators(self.closed_candles(), self.params)
+        return self.prof.indicators(self.closed_candles(), self.params)
 
     # --- orders ----------------------------------------------------------
     def ensure_stop(self):
@@ -203,9 +205,19 @@ class Bot:
         record_trade({"time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                       "entry_time": datetime.fromtimestamp(pos["opened"], timezone.utc).isoformat(timespec="seconds"),
                       "mode": self.mode, "side": pos["side"], "qty": pos["qty"], "entry": round(pos["entry"], 2),
-                      "exit": round(px, 2), "pnl_usd_est": round(pnl, 4), "reason": reason})
+                      "exit": round(px, 2), "pnl_usd_est": round(pnl, 4), "reason": reason}, f"trades{self.prof.suffix}.csv")
         self.state.d["pos"] = None
         self.state.save()
+
+    def exit_market(self, pos, reason):
+        exit_side = "sell" if pos["side"] > 0 else "buy"
+        if self.mode == "paper":
+            px = float(self.data.ticker(SYMBOL)["mark_price"]) * (1 - pos["side"] * SLIPPAGE)
+        else:
+            o = self.cli.place_order(self.pid, exit_side, pos["qty"], "market_order", reduce_only=True)
+            px = float(o.get("average_fill_price") or self.data.ticker(SYMBOL)["mark_price"])
+            self.cli.cancel_all(self.pid)  # remove the now-orphaned stop order
+        self.close_local(pos, px, reason)
 
     # --- main loop -------------------------------------------------------
     def check_stop_fill(self):
@@ -226,7 +238,9 @@ class Bot:
         ind = self.indicators()
         i = len(ind.c) - 1
         pos = self.state.d["pos"]
-        if pos:
+        if pos and ind.exit_signal(i, pos["side"]):
+            self.exit_market(pos, "signal")  # then fall through: a reversal can enter on the same bar
+        elif pos:
             pos["best"] = max(pos["best"], ind.h[i]) if pos["side"] > 0 else min(pos["best"], ind.l[i])
             self.move_stop(ind.trail_stop(i, pos["side"], pos["stop"], pos["best"]))
             self.state.save()
@@ -250,7 +264,7 @@ class Bot:
                  ind.c[i], ind.ema[i], ind.adx[i], ind.atr[i], sig, eq)
         record_trade({"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "mode": self.mode,
                       "close": round(ind.c[i], 2), "ema200": round(ind.ema[i], 2), "adx": round(ind.adx[i], 1),
-                      "atr": round(ind.atr[i], 2), "signal": sig, "equity": round(eq, 2)}, "signals.csv")
+                      "atr": round(ind.atr[i], 2), "signal": sig, "equity": round(eq, 2)}, f"signals{self.prof.suffix}.csv")
         if sig:
             self.open_position(sig, ind)
 
@@ -271,7 +285,7 @@ class Bot:
                 return
 
     def first_start(self):
-        step = _RES_SECONDS[RESOLUTION]
+        step = self.prof.bar_sec
         bar = int(time.time()) // step * step
         if self.state.d["last_bar"] == 0 and time.time() - bar > 900:
             # first start mid-bar: don't act on a signal that fired hours ago, wait for the next close
@@ -284,7 +298,7 @@ class Bot:
             self.state.save()
 
     def tick(self, once=False):
-        step = _RES_SECONDS[RESOLUTION]
+        step = self.prof.bar_sec
         if once:
             self.check_paper_stop_since(self.state.d.get("last_check") or int(time.time()) - 900)
         else:
@@ -318,20 +332,24 @@ def main():
     ap.add_argument("--mode", choices=["paper", "testnet", "live"], default="paper")
     ap.add_argument("--paper-equity", type=float, default=55.0)
     ap.add_argument("--once", action="store_true", help="run a single check and exit (for scheduled cloud runs)")
+    ap.add_argument("--strategy", choices=list(PROFILES), default="donchian4h")
     a = ap.parse_args()
     if a.once and a.mode != "paper":
         sys.exit("--once is only for paper mode; live/testnet need the continuous loop")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-                        handlers=[logging.FileHandler(os.path.join(HERE, f"bot_{a.mode}.log")),
+                        handlers=[logging.FileHandler(os.path.join(HERE, f"bot_{a.mode}{PROFILES[a.strategy].suffix}.log")),
                                   logging.StreamHandler(sys.stdout)])
     load_env()
     if a.mode == "live" and os.environ.get("LIVE_CONFIRM") != "YES":
         sys.exit("Live mode needs LIVE_CONFIRM=YES in .env. Run paper/testnet first.")
+    prof = PROFILES[a.strategy]
     if a.mode == "paper":
-        State.path = os.path.join(HERE, "state_paper.json")
+        State.path = os.path.join(HERE, f"state_paper{prof.suffix}.json")
     elif a.mode == "testnet":
-        State.path = os.path.join(HERE, "state_testnet.json")
-    Bot(a.mode, a.paper_equity).run(once=a.once)
+        State.path = os.path.join(HERE, f"state_testnet{prof.suffix}.json")
+    elif prof.suffix:
+        State.path = os.path.join(HERE, f"state{prof.suffix}.json")
+    Bot(a.mode, a.paper_equity, prof).run(once=a.once)
 
 
 if __name__ == "__main__":

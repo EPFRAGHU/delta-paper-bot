@@ -31,11 +31,12 @@ def load_candles(symbol, resolution, days):
 
 
 def run(candles, symbol, p: Params, rc: RiskConfig, equity=55.0, start=0, end=None, entry_filter=None,
-        entry_price=None):
+        entry_price=None, ind_cls=Indicators):
     """Bar-by-bar simulation. Signals on bar i close, fill at bar i+1 open.
     entry_filter(i, signal) -> bool can veto entries (used to test extra data like funding).
-    entry_price(i) -> price overrides the fill (used to model late scheduled runs)."""
-    ind = Indicators(candles, p)
+    entry_price(i) -> price overrides the fill (used to model late scheduled runs).
+    ind_cls picks the strategy (Indicators = Donchian breakout, EmaCross = EMA 9/21)."""
+    ind = ind_cls(candles, p)
     cv = CONTRACT_VALUE[symbol]
     end = end or len(candles)
     guard = Guard(rc, equity)
@@ -59,6 +60,13 @@ def run(candles, symbol, p: Params, rc: RiskConfig, equity=55.0, start=0, end=No
                 equity += pnl
                 trades.append({"t_in": pos["t_in"], "t": candles[i]["time"], "side": pos["side"],
                                "entry": pos["entry"], "exit": px, "qty": pos["qty"], "pnl": pnl, "reason": "stop"})
+                pos = None
+            elif ind.exit_signal(i, pos["side"]):
+                px = o[i + 1]
+                pnl = pos["side"] * (px - pos["entry"]) * pos["qty"] * cv - (px + pos["entry"]) * pos["qty"] * cv * fee
+                equity += pnl
+                trades.append({"t_in": pos["t_in"], "t": candles[i + 1]["time"], "side": pos["side"],
+                               "entry": pos["entry"], "exit": px, "qty": pos["qty"], "pnl": pnl, "reason": "signal"})
                 pos = None
             else:
                 pos["best"] = max(pos["best"], ind.h[i]) if pos["side"] > 0 else min(pos["best"], ind.l[i])

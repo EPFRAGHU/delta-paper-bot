@@ -102,6 +102,9 @@ class FakeInd:
     def entry_signal(self, i):
         return self.sig
 
+    def exit_signal(self, i, side):
+        return False
+
     def trail_stop(self, i, side, cur, best):
         return max(cur, best - 3 * 40.0)
 
@@ -162,6 +165,46 @@ def test_paper_once_replays_stop_between_runs():
         b.check_paper_stop_since(1000)
         assert b.state.d["pos"] is None
         assert b.state.d["paper_equity"] < 55  # loss booked at the stop, not at the recovered mark
+    finally:
+        botmod.DeltaClient = orig
+
+
+def test_ema_cross_signals():
+    from strategy import EmaCross, EmaParams
+    p = EmaParams(trend_len=20)
+    # long uptrend, a dip that pulls EMA9 under EMA21, then a rally that crosses it back up
+    closes = [100 + i for i in range(60)] + [159 - 2 * i for i in range(8)] + [143 + 3 * i for i in range(10)]
+    cs = [{"high": c + 1, "low": c - 1, "close": c} for c in closes]
+    ind = EmaCross(cs, p)
+    ups = [i for i in range(len(cs)) if ind.entry_signal(i) == 1]
+    downs = [i for i in range(len(cs)) if ind.exit_signal(i, 1)]
+    assert downs and ups and ups[-1] > downs[0]  # exit on the dip, re-enter long on the rally
+    assert all(ind.c[i] > ind.ema[i] for i in ups)  # longs only above the trend EMA
+
+
+def test_ema90_signal_exit_and_reversal():
+    import json
+    from profiles import PROFILES
+    d = tempfile.mkdtemp()
+    botmod.State.path = os.path.join(d, "s.json")
+    botmod.HERE = d
+    json.dump({}, open(os.path.join(d, "params_ema90.json"), "w"))
+    fx = FakeExchange()
+    orig = botmod.DeltaClient
+    botmod.DeltaClient = lambda *a, **k: fx
+    try:
+        b = botmod.Bot("paper", 55, PROFILES["ema90"])
+        b.state.d["pos"] = {"side": 1, "qty": 1, "entry": 2250.0, "stop": 2100.0, "best": 2300.0,
+                            "stop_id": None, "opened": 1000}
+        fi = FakeInd(-1)                       # bearish cross below EMA200: exit long AND go short
+        fi.exit_signal = lambda i, side: side == 1
+        b.indicators = lambda: fi
+        b.on_bar_close()
+        pos = b.state.d["pos"]
+        assert pos and pos["side"] == -1 and pos["stop"] > 2300
+        rows = open(os.path.join(d, "trades_ema90.csv")).read()
+        assert "signal" in rows and os.path.exists(os.path.join(d, "signals_ema90.csv"))
+        assert b.state.d["paper_equity"] > 55  # long closed in profit at mark 2300
     finally:
         botmod.DeltaClient = orig
 

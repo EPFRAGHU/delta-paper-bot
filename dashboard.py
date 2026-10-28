@@ -11,13 +11,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from backtest import load_candles, run
-from delta_client import DeltaClient, DeltaError, _RES_SECONDS
+from delta_client import DeltaClient, DeltaError
+from profiles import PROFILES, fetch_candles
 from risk import RiskConfig, TAKER_FEE
-from strategy import Params, ema
+from strategy import ema
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SYMBOL, RESOLUTION, CV = "ETHUSD", "4h", 0.01
-STATE_FILES = {"paper": "state_paper.json", "testnet": "state_testnet.json", "live": "state.json"}
+SYMBOL, CV = "ETHUSD", 0.01
+# dashboard tab -> (bot mode, strategy profile, state file prefix)
+VIEWS = {
+    "paper": ("paper", "donchian4h", "state_paper"),
+    "paper_ema90": ("paper", "ema90", "state_paper"),
+    "testnet": ("testnet", "donchian4h", "state_testnet"),
+    "live": ("live", "donchian4h", "state"),
+}
 PORT = 8765
 
 _cache = {}
@@ -44,23 +51,32 @@ def iso_to_ts(s):
     return int(datetime.fromisoformat(s).timestamp())
 
 
-def params():
-    return Params(**json.load(open(os.path.join(HERE, "params.json"))))
+def params(prof):
+    return prof.params_cls(**json.load(open(os.path.join(HERE, prof.params_file))))
 
 
-def chart_data(candles, p):
+def chart_data(candles, prof, p):
+    """Candles plus the indicator lines this strategy trades on (drawn by the dashboard)."""
     closes = [float(c["close"]) for c in candles]
-    e = ema(closes, p.trend_len)
-    n = p.entry_len
-    hi, lo = [], []
-    for i in range(n, len(candles)):
-        hi.append({"time": candles[i]["time"], "value": max(float(c["high"]) for c in candles[i - n:i])})
-        lo.append({"time": candles[i]["time"], "value": min(float(c["low"]) for c in candles[i - n:i])})
+
+    def line(name, color, values, skip, dash=False):
+        return {"name": name, "color": color, "dash": dash,
+                "data": [{"time": c["time"], "value": v} for c, v in zip(candles, values)][skip:]}
+
+    lines = [line("EMA 200 (trend filter)", "#f0b90b", ema(closes, p.trend_len), p.trend_len)]
+    if prof.name == "ema90":
+        lines += [line(f"EMA {p.fast}", "#22d3ee", ema(closes, p.fast), p.fast),
+                  line(f"EMA {p.slow}", "#a78bfa", ema(closes, p.slow), p.slow)]
+    else:
+        n = p.entry_len
+        hi = [None] * n + [max(float(c["high"]) for c in candles[i - n:i]) for i in range(n, len(candles))]
+        lo = [None] * n + [min(float(c["low"]) for c in candles[i - n:i]) for i in range(n, len(candles))]
+        lines += [line("Breakout high", "rgba(59,130,246,.7)", hi, n, True),
+                  line("Breakout low", "rgba(59,130,246,.7)", lo, n, True)]
     return {
         "candles": [{"time": c["time"], "open": float(c["open"]), "high": float(c["high"]),
                      "low": float(c["low"]), "close": float(c["close"])} for c in candles],
-        "ema": [{"time": c["time"], "value": v} for c, v in zip(candles, e)][p.trend_len:],
-        "upper": hi, "lower": lo,
+        "lines": lines,
     }
 
 
@@ -86,20 +102,21 @@ def summarize(trades, start_eq):
     }
 
 
-def live_payload(mode):
-    p = params()
-    step = _RES_SECONDS[RESOLUTION]
-    sp = os.path.join(HERE, STATE_FILES[mode])
+def live_payload(view):
+    mode, pname, state_prefix = VIEWS[view]
+    prof = PROFILES[pname]
+    p = params(prof)
+    step = prof.bar_sec
+    sp = os.path.join(HERE, f"{state_prefix}{prof.suffix}.json")
     state = json.load(open(sp)) if os.path.exists(sp) else {}
     cli = DeltaClient()
     tick = cached("ticker", 3, lambda: cli.ticker(SYMBOL))
     mark, last = float(tick["mark_price"]), float(tick.get("close") or tick["mark_price"])
 
     def fetch():
-        now = int(time.time())
-        return cli.candles(SYMBOL, RESOLUTION, now - 450 * step, now)
+        return fetch_candles(cli, SYMBOL, prof, 450, int(time.time()))
     # full history changes slowly; the forming candle is patched with the live last price below
-    candles = [dict(c) for c in cached("candles", 30, fetch)]
+    candles = [dict(c) for c in cached("candles" + prof.name, 30, fetch)]
     cur_bar = int(time.time()) // step * step
     if candles and candles[-1]["time"] == cur_bar:
         c = candles[-1]
@@ -109,7 +126,7 @@ def live_payload(mode):
     elif candles and candles[-1]["time"] < cur_bar:
         candles.append({"time": cur_bar, "open": last, "high": last, "low": last, "close": last})
 
-    rows = read_csv("trades.csv", mode)
+    rows = read_csv(f"trades{prof.suffix}.csv", mode)
     trades = []
     for r in rows:
         entry, exit_, qty = float(r["entry"]), float(r["exit"]), int(r["qty"])
@@ -148,10 +165,10 @@ def live_payload(mode):
     hb = state.get("heartbeat")
     last_bar = state.get("last_bar") or 0
     return {
-        "mode": mode, "symbol": SYMBOL, "resolution": RESOLUTION, "params": p.__dict__,
+        "mode": view, "symbol": SYMBOL, "strategy": prof.label, "bar_sec": step, "params": p.__dict__,
         "mark": mark, "last": last, "updated": int(time.time()),
         "equity": equity, "start_equity": start_eq, "position": pos,
-        "trades": trades[::-1], "signals": read_csv("signals.csv", mode)[::-1][:200],
+        "trades": trades[::-1], "signals": read_csv(f"signals{prof.suffix}.csv", mode)[::-1][:200],
         "stats": summarize(trades, start_eq) if start_eq else None, "curve": curve,
         # loop bot beats every 30s; scheduled cloud runs every ~15 min (GitHub cron can lag, so allow 3x + slack)
         "bot_alive": bool(hb and time.time() - hb < 3 * state.get("heartbeat_every", 30) + 90), "heartbeat": hb,
@@ -159,14 +176,15 @@ def live_payload(mode):
         "halted": (state.get("guard") or {}).get("halted", False),
         "stop_file": os.path.exists(os.path.join(HERE, "STOP")),
         "next_decision": (int(time.time()) // step + 1) * step,
-        "chart": chart_data(candles, p),
+        "chart": chart_data(candles, prof, p),
     }
 
 
 def backtest_payload():
     def compute():
-        p = params()
-        candles = load_candles(SYMBOL, RESOLUTION, 1460)
+        prof = PROFILES["donchian4h"]
+        p = params(prof)
+        candles = load_candles(SYMBOL, "4h", 1460)
         start_eq = 55.0
         eq, tr, _ = run(candles, SYMBOL, p, RiskConfig(), start_eq)
         trades = [{"entry_time": t["t_in"], "exit_time": t["t"], "side": t["side"], "qty": t["qty"],
@@ -177,10 +195,11 @@ def backtest_payload():
             e += t["pnl"]
             curve.append({"time": t["exit_time"], "value": e})
         return {
-            "mode": "backtest", "symbol": SYMBOL, "resolution": RESOLUTION, "params": p.__dict__,
+            "mode": "backtest", "symbol": SYMBOL, "strategy": prof.label, "bar_sec": prof.bar_sec,
+            "params": p.__dict__,
             "equity": eq, "start_equity": start_eq, "mark": float(candles[-1]["close"]), "position": None,
             "trades": trades[::-1], "signals": [], "stats": summarize(trades, start_eq), "curve": curve,
-            "chart": chart_data(candles, p),
+            "chart": chart_data(candles, prof, p),
             "buy_hold_pct": 100 * (float(candles[-1]["close"]) / float(candles[0]["open"]) - 1),
         }
     return cached("backtest", 3600, compute)
@@ -205,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
                 mode = parse_qs(u.query).get("mode", ["paper"])[0]
                 if mode == "backtest":
                     payload = backtest_payload()
-                elif mode in STATE_FILES:
+                elif mode in VIEWS:
                     payload = live_payload(mode)
                 else:
                     return self._send(400, '{"error":"bad mode"}', "application/json")
