@@ -252,7 +252,7 @@ function renderPos(d) {
       <div><div class="l">P&amp;L if stopped now</div><div class="v ${cls(p.risk_to_stop)}">${sgn(p.risk_to_stop)}</div></div>
       <div><div class="l">Unrealized P&amp;L</div><div class="v ${cls(p.upnl)}">${sgn(p.upnl)} (${pct(p.upnl_pct, 2)})</div></div>
       <div><div class="l">Opened</div><div class="v">${ts(p.opened)}</div></div>
-    </div>` : `<div class="empty">Flat. Waiting for a breakout signal.</div>`;
+    </div>` : `<div class="empty">Flat. Waiting for an entry signal.</div>`;
 }
 
 function renderTables(d) {
