@@ -81,6 +81,9 @@ Limits: GitHub can delay scheduled runs by 5–20 minutes, so paper entries can 
 
 To pause the cloud bot, open the repo's Actions tab, choose paper-bot, then "Disable workflow".
 
+## Telegram alerts
+The bots message you on every entry, stop move, exit and drawdown halt. Each message is tagged with the mode and strategy. They stay silent unless both repository secrets are set: `TELEGRAM_BOT_TOKEN` (from @BotFather) and `TELEGRAM_CHAT_ID` (your chat id). To test, open Actions, choose paper-bot, click "Run workflow" and tick "Send a Telegram test message". For local or VPS runs, put the same two values in `.env`.
+
 ## Dashboard
 Run `python dashboard.py` in a second terminal, then open http://127.0.0.1:8765
 

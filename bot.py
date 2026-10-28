@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from delta_client import DeltaClient, DeltaError, PROD_URL, TESTNET_URL
 from profiles import PROFILES, fetch_candles
 from risk import RiskConfig, Guard, size_contracts, TAKER_FEE, SLIPPAGE
+import notify
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SYMBOL = "ETHUSD"
@@ -169,8 +170,11 @@ class Bot:
                     self.cli.cancel_order(self.pid, old_id)
                 except DeltaError as e:
                     log.warning("cancel old stop %s failed: %s", old_id, e)
+        moved = not force and pos.get("placed_stop") is not None
         pos["stop"] = pos["placed_stop"] = new_stop
         log.info("stop set at %.2f", new_stop)
+        if moved:
+            self.alert(f"Stop moved to {new_stop:.2f} ({'LONG' if pos['side'] > 0 else 'SHORT'} from {pos['entry']:.2f})")
 
     def open_position(self, side, ind):
         price = float(self.data.ticker(SYMBOL)["mark_price"])
@@ -195,6 +199,12 @@ class Bot:
                                "stop_id": None, "opened": int(time.time())}
         self.move_stop(stop, force=True)
         self.state.save()
+        p = self.state.d["pos"]
+        self.alert(f"ENTER {'LONG' if side > 0 else 'SHORT'} {qty} contracts @ {fill:.2f}\n"
+                   f"Stop {p['stop']:.2f} · notional ${qty * self.cv * fill:.2f} ({qty * self.cv * fill / eq:.2f}x) · equity ${eq:.2f}")
+
+    def alert(self, text):
+        notify.send(f"[{self.mode.upper()} · {self.prof.label}]\n{text}")
 
     def close_local(self, pos, px, reason):
         pnl = pos["side"] * (px - pos["entry"]) * pos["qty"] * self.cv - (px + pos["entry"]) * pos["qty"] * self.cv * TAKER_FEE
@@ -208,6 +218,10 @@ class Bot:
                       "exit": round(px, 2), "pnl_usd_est": round(pnl, 4), "reason": reason}, f"trades{self.prof.suffix}.csv")
         self.state.d["pos"] = None
         self.state.save()
+        eq = self.state.d.get("paper_equity") if self.mode == "paper" else self.state.d.get("equity")
+        self.alert(f"EXIT {'LONG' if pos['side'] > 0 else 'SHORT'} @ {px:.2f} ({reason})\n"
+                   f"Entry {pos['entry']:.2f} · P&L {'+' if pnl >= 0 else '-'}${abs(pnl):.2f}"
+                   + (f" · equity ${float(eq):.2f}" if eq is not None else ""))
 
     def exit_market(self, pos, reason):
         exit_side = "sell" if pos["side"] > 0 else "buy"
@@ -252,6 +266,10 @@ class Bot:
         self.state.save()
         if self.guard.halted:
             log.error("max drawdown hit (peak $%.2f, now $%.2f). Bot halted; review before restarting.", self.guard.peak, eq)
+            if not self.state.d.get("halt_alerted"):
+                self.state.d["halt_alerted"] = True
+                self.state.save()
+                self.alert(f"HALTED: max drawdown hit (peak ${self.guard.peak:.2f}, now ${eq:.2f}). No new trades until reviewed.")
             return
         if os.path.exists(os.path.join(HERE, "STOP")):
             log.info("STOP file present: no new entries")

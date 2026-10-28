@@ -7,6 +7,11 @@ on:
     # off-peak minutes: GitHub drops/delays many runs scheduled at :00/:15/:30/:45
     - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
+    inputs:
+      test_alert:
+        description: "Send a Telegram test message"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -19,6 +24,10 @@ jobs:
   tick:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # optional: alerts are skipped when these repository secrets are not set
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
       - uses: actions/checkout@v5
 
@@ -44,3 +53,8 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -q -m "paper tick $(date -u +%Y-%m-%dT%H:%MZ)"
           git pull -q --rebase && git push -q
+
+      - name: Send Telegram test alert
+        if: ${{ inputs.test_alert }}
+        continue-on-error: true
+        run: python notify.py "Delta paper bot connected. You'll get a message here on every entry, stop move and exit."

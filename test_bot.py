@@ -169,6 +169,41 @@ def test_paper_once_replays_stop_between_runs():
         botmod.DeltaClient = orig
 
 
+def test_alerts_on_enter_stop_move_and_exit():
+    import json
+    import notify
+    sent = []
+    orig_send, orig_client = notify.send, botmod.DeltaClient
+    notify.send = lambda text: sent.append(text) or True
+    d = tempfile.mkdtemp()
+    botmod.State.path = os.path.join(d, "s.json")
+    botmod.HERE = d
+    json.dump({"atr_stop": 2.5, "atr_trail": 3.0}, open(os.path.join(d, "params.json"), "w"))
+    fx = FakeExchange()
+    botmod.DeltaClient = lambda *a, **k: fx
+    try:
+        b = botmod.Bot("paper", 55)
+        b.indicators = lambda: FakeInd(1)
+        b.on_bar_close()                          # enter long
+        fi = FakeInd(0); fi.h = [2500.0]
+        b.indicators = lambda: fi
+        b.on_bar_close()                          # trail stop up
+        b.close_local(b.state.d["pos"], 2400.0, "stop")
+        kinds = [t.split("\n")[1].split()[0] for t in sent]
+        assert kinds == ["ENTER", "Stop", "EXIT"], sent
+        assert all(t.startswith("[PAPER · Donchian breakout · 4h]") for t in sent)
+        assert "P&L +$" in sent[-1]
+    finally:
+        notify.send, botmod.DeltaClient = orig_send, orig_client
+
+
+def test_notify_is_silent_without_credentials():
+    import notify
+    for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+        os.environ.pop(k, None)
+    assert notify.send("x") is False
+
+
 def test_ema_cross_signals():
     from strategy import EmaCross, EmaParams
     p = EmaParams(trend_len=20)
