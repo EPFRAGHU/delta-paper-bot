@@ -102,6 +102,31 @@ def summarize(trades, start_eq):
     }
 
 
+def waiting_for(prof, p, closed):
+    """Plain-language description of what would make a flat bot enter, from closed candles."""
+    if len(closed) < p.trend_len + 10:
+        return "Collecting candle history."
+    ind = prof.indicators(closed, p)
+    i = len(ind.c) - 1
+    up = ind.c[i] > ind.ema[i]
+    tf = "4h" if prof.bar_sec == 14400 else f"{prof.bar_sec // 60}m"
+    if prof.name == "ema90":
+        if up:
+            return f"Price is above the EMA 200. A long opens when EMA {p.fast} crosses above EMA {p.slow}."
+        return f"Price is below the EMA 200. A short opens when EMA {p.fast} crosses below EMA {p.slow}."
+    n = p.entry_len
+    hi, lo = max(ind.h[i - n + 1:i + 1]), min(ind.l[i - n + 1:i + 1])
+    rising = ind.ema[i] > ind.ema[i - 5]
+    weak = ind.adx[i] < p.adx_min
+    if rising and up:
+        s = f"A long opens on a {tf} close above {hi:,.2f}."
+    elif not rising and not up:
+        s = f"A short opens on a {tf} close below {lo:,.2f}."
+    else:
+        s = "Trend is turning, so no breakout counts until price and the EMA 200 agree."
+    return s + (" Trend strength is low right now." if weak else "")
+
+
 def live_payload(view):
     mode, pname, state_prefix = VIEWS[view]
     prof = PROFILES[pname]
@@ -177,6 +202,7 @@ def live_payload(view):
         "stop_file": os.path.exists(os.path.join(HERE, "STOP")),
         "next_decision": (int(time.time()) // step + 1) * step,
         "chart": chart_data(candles, prof, p),
+        "waiting_for": waiting_for(prof, p, [c for c in candles if c["time"] < cur_bar]),
     }
 
 
