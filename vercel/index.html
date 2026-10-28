@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Dashboard</title>
+<style>body { margin: 0; background: #0b0e11; color: #8a94a3; font: 13px -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+p { padding: 24px; }</style>
+</head>
+<body>
+<p id="msg">Loading dashboard…</p>
+<script>
+// Thin loader: the real dashboard lives in the GitHub repo (docs/index.html, refreshed by the cloud bot),
+// so dashboard updates go live with a git push instead of a Vercel redeploy.
+fetch("https://raw.githubusercontent.com/EPFRAGHU/delta-paper-bot/main/docs/index.html?t=" + Date.now())
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+  .then(html => { document.open(); document.write(html); document.close(); })
+  .catch(e => { document.getElementById("msg").textContent = "Could not load dashboard: " + e.message; });
+</script>
+</body>
+</html>

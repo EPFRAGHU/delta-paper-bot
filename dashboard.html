@@ -339,10 +339,12 @@ function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
 setInterval(() => { if (Date.now() - live.at > 20000) $("live").className = "live"; }, 5000);
 
 async function load() {
+  const want = mode;
   try {
-    const r = await fetch(STATIC ? `${DATA_URL}/${mode}.json?t=${Date.now()}` : "/api/data?mode=" + mode);
+    const r = await fetch(STATIC ? `${DATA_URL}/${want}.json?t=${Date.now()}` : "/api/data?mode=" + want);
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || r.status);
+    if (want !== mode) return;  // user switched tabs while this request was in flight
     render(d);
   } catch (e) {
     $("err").style.display = "block";
