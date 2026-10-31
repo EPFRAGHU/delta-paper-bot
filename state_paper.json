@@ -3,20 +3,20 @@
     "side": -1,
     "qty": 1,
     "entry": 2253.222342164644,
-    "stop": 2284.05,
+    "stop": 2279.1,
     "best": 2173.0,
     "stop_id": null,
     "opened": 1793318431,
-    "placed_stop": 2284.05
+    "placed_stop": 2279.1
   },
-  "last_bar": 1793433600,
+  "last_bar": 1793448000,
   "paper_equity": 55.0,
   "guard": {
     "peak": 55.0,
     "halted": false
   },
-  "last_check": 1793447117,
-  "heartbeat": 1793447117,
+  "last_check": 1793448030,
+  "heartbeat": 1793448030,
   "heartbeat_every": 900,
   "equity": 55.0
 }
