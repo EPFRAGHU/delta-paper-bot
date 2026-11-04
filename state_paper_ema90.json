@@ -1,13 +1,13 @@
 {
   "pos": null,
-  "last_bar": 1793772000,
+  "last_bar": 1793777400,
   "paper_equity": 53.70182111298734,
   "guard": {
     "peak": 55.0,
     "halted": false
   },
-  "last_check": 1793776517,
-  "heartbeat": 1793776517,
+  "last_check": 1793777426,
+  "heartbeat": 1793777426,
   "heartbeat_every": 900,
   "equity": 53.70182111298734
 }
