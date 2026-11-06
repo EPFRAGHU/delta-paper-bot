@@ -52,7 +52,8 @@ jobs:
           for f in state_paper*.json trades*.csv signals*.csv; do if [ -f "$f" ]; then git add "$f"; fi; done
           git diff --cached --quiet && exit 0
           git commit -q -m "paper tick $(date -u +%Y-%m-%dT%H:%MZ)"
-          git pull -q --rebase && git push -q
+          # GitHub occasionally answers 500 on push; one retry rides out those blips
+          git pull -q --rebase && git push -q || (sleep 15 && git pull -q --rebase && git push -q)
 
       - name: Send Telegram test alert
         if: ${{ inputs.test_alert }}
