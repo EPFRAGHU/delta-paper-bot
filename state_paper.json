@@ -9,14 +9,14 @@
     "opened": 1795190433,
     "placed_stop": 1695.7
   },
-  "last_bar": 1795248000,
+  "last_bar": 1795262400,
   "paper_equity": 57.532170331977966,
   "guard": {
     "peak": 57.532170331977966,
     "halted": false
   },
-  "last_check": 1795261527,
-  "heartbeat": 1795261527,
+  "last_check": 1795262432,
+  "heartbeat": 1795262432,
   "heartbeat_every": 900,
   "equity": 57.532170331977966
 }
