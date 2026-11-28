@@ -4,19 +4,19 @@
     "qty": 1,
     "entry": 1671.357671318056,
     "stop": 1718.05,
-    "best": 1653.0,
+    "best": 1646.8,
     "stop_id": null,
     "opened": 1795797037,
     "placed_stop": 1718.05
   },
-  "last_bar": 1795840200,
+  "last_bar": 1795845600,
   "paper_equity": 58.279985226176116,
   "guard": {
     "peak": 58.62231309761697,
     "halted": false
   },
-  "last_check": 1795844721,
-  "heartbeat": 1795844721,
+  "last_check": 1795845632,
+  "heartbeat": 1795845632,
   "heartbeat_every": 900,
   "equity": 58.279985226176116
 }
